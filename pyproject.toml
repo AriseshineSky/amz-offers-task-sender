@@ -17,7 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-carts_amz_offers_update_task_sender = "carts_amz_offers.cli:feed_seeds"
+amz_offers_update_task_sender = "carts_amz_offers.cli:feed_seeds"
 
 [tool.uv.sources]
 em-spapi-celery = { path = "../em-spapi-celery", editable = true }

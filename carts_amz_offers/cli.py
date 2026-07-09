@@ -117,7 +117,7 @@ def feed_seeds(
     ttl=7,
     force=False,
 ):
-    setup_cli_logging("carts_amz_offers.cli", "carts_amz_offers_update_task_sender.log")
+    setup_cli_logging("carts_amz_offers.cli", "amz_offers_update_task_sender.log")
     broker_url = normalize_broker(broker_url)
     config = get_config()
     pg_config = config.get("pg_db")

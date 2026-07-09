@@ -23,7 +23,10 @@ export BROKER_URL=redis://127.0.0.1:6379/0
 ## 运行
 
 ```bash
-carts_amz_offers_update_task_sender \
+./scripts/amz_offers_update_task_sender.sh
+
+# 或直接调用 CLI
+amz_offers_update_task_sender \
   -s /path/to/gcs-service-account.json \
   -b redis://127.0.0.1:6379/0
 ```
