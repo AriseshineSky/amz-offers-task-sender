@@ -10,8 +10,12 @@
 #     -b 'redis://127.0.0.1:6379/0' \
 #     -q 20 -t 72
 #
-# Override defaults via env when running with no args:
-#   TTL=24 QPS=10 ./scripts/amz_offers_update_task_sender.sh
+# Broker URL is passed via BROKER_URL env (not -b) so passwords with
+# shell metacharacters ($, `, ", \, !) are not re-interpreted by bash.
+# Use single quotes when exporting, or URL-encode special chars in the password.
+#
+#   export BROKER_URL='redis://:p@ssw0rd@host:6379/0'
+#   ./scripts/amz_offers_update_task_sender.sh
 #
 # Direct equivalents:
 #   uv run amz_offers_update_task_sender -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20 -t 72
@@ -23,7 +27,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 GCS_SA="${GCS_SA:-${HOME}/.em_celery/gcs-sa.json}"
-BROKER_URL="${BROKER_URL:-redis://127.0.0.1:6379/0}"
+: "${BROKER_URL:=redis://127.0.0.1:6379/0}"
+export BROKER_URL
 QPS="${QPS:-20}"
 TTL="${TTL:-24}"
 
@@ -35,6 +40,5 @@ fi
 
 exec uv run amz_offers_update_task_sender \
   -s "${GCS_SA}" \
-  -b "${BROKER_URL}" \
   -q "${QPS}" \
   -t "${TTL}"
