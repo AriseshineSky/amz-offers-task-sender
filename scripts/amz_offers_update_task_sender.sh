@@ -7,7 +7,6 @@
 # Run with explicit CLI args:
 #   ./scripts/amz_offers_update_task_sender.sh \
 #     -s ~/.em_celery/gcs-sa.json \
-#     -b 'redis://127.0.0.1:6379/0' \
 #     -q 20 -t 72
 #
 # Broker URL is passed via BROKER_URL env (not -b) so passwords with
@@ -30,7 +29,7 @@ GCS_SA="${GCS_SA:-${HOME}/.em_celery/gcs-sa.json}"
 : "${BROKER_URL:=redis://127.0.0.1:6379/0}"
 export BROKER_URL
 QPS="${QPS:-20}"
-TTL="${TTL:-24}"
+TTL="${TTL:-12}"
 
 cd "${PROJECT_ROOT}"
 

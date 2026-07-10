@@ -3,7 +3,6 @@
 import datetime
 import random
 import time
-from urllib.parse import urlparse
 
 import dateutil.parser
 import redis
@@ -48,16 +47,16 @@ class CartAmzOffersUpdateTaskSender:
         self.stats = OffersUpdateRunStats()
 
     def _redis_client(self, broker_url):
-        url = urlparse(broker_url)
-        return redis.Redis(
-            host=url.hostname,
-            port=url.port,
-            db=int(url.path.lstrip("/") or 0),
-            password=url.password,
-            decode_responses=True,
-        )
+        # from_url correctly decodes percent-encoded passwords (urlparse does not).
+        return redis.Redis.from_url(broker_url, decode_responses=True)
 
-    def run(self):
+    def run(self, seen_asins=None):
+        """Enqueue configured tiers.
+
+        Args:
+            seen_asins: Optional shared set for cross-tier / cross-phase ASIN
+                dedup within one marketplace. Mutated in place when provided.
+        """
         cnt = self.tasks_cnt()
         self.stats.queue_cnt_before = cnt
         if cnt > self.max_tasks_cnt and not self.force:
@@ -65,7 +64,8 @@ class CartAmzOffersUpdateTaskSender:
             self.stats.queue_full = True
             return self.stats
 
-        seen_asins = set()
+        if seen_asins is None:
+            seen_asins = set()
         for tier_name, data_source, priority in self.tiers:
             tier_stats = TierRunStats()
             if data_source is None:

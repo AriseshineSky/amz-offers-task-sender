@@ -35,6 +35,20 @@ class OffersUpdateRunStats:
     def alive_cnt(self) -> int:
         return self.fresh_cnt
 
+    def merge(self, other: "OffersUpdateRunStats") -> None:
+        """Accumulate another run's counters (e.g. cart then ads then catalog phases)."""
+        self.seed_cnt += other.seed_cnt
+        self.queued_cnt += other.queued_cnt
+        self.fresh_cnt += other.fresh_cnt
+        self.missing_cnt += other.missing_cnt
+        if other.queue_full:
+            self.queue_full = True
+        if other.skipped_missing_file:
+            self.skipped_missing_file = True
+        if not self.queue_cnt_before and other.queue_cnt_before:
+            self.queue_cnt_before = other.queue_cnt_before
+        self.tier_stats.update(other.tier_stats)
+
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
         payload["tier_stats"] = {

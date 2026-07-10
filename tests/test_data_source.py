@@ -145,6 +145,44 @@ def test_sender_deduplicates_lower_priority_tiers():
     assert sender.process_products.call_args_list[2].args[1] == PRIORITY_BULK
 
 
+def test_sender_deduplicates_across_phased_runs():
+    """CLI runs cart → ads → catalog as separate phases with a shared seen set."""
+    seen_asins = set()
+    total = OffersUpdateRunStats()
+
+    cart_source = MagicMock()
+    cart_source.get_amz_products.return_value = [
+        {"source_product_id": "B012345678"},
+    ]
+    ads_source = MagicMock()
+    ads_source.get_amz_products.return_value = [
+        {"source_product_id": "B012345678"},
+        {"source_product_id": "B087654321"},
+    ]
+
+    for tier_name, source, priority in [
+        ("cart", cart_source, PRIORITY_CRITICAL),
+        ("ads", ads_source, PRIORITY_NORMAL),
+    ]:
+        sender = CartAmzOffersUpdateTaskSender(
+            [(tier_name, source, priority)],
+            broker_url="redis://127.0.0.1:6379/0",
+            qps=0,
+            marketplace="us",
+            condition="new",
+            ttl=24,
+            force=True,
+        )
+        sender.process_products = MagicMock(side_effect=lambda asins, p: len(asins))
+        sender.tasks_cnt = MagicMock(return_value=0)
+        total.merge(sender.run(seen_asins=seen_asins))
+
+    assert total.tier_stats["cart"].seed_cnt == 1
+    assert total.tier_stats["ads"].seed_cnt == 1
+    assert total.tier_stats["ads"].dedup_cnt == 1
+    assert seen_asins == {"B012345678", "B087654321"}
+
+
 def test_offers_update_run_stats_serializes_tier_stats():
     stats = OffersUpdateRunStats(
         tier_stats={
@@ -153,3 +191,9 @@ def test_offers_update_run_stats_serializes_tier_stats():
     )
     payload = stats.to_dict()
     assert payload["tier_stats"]["cart"]["seed_cnt"] == 10
+
+
+def test_tier_phases_order():
+    from carts_amz_offers.cli import TIER_PHASES
+
+    assert TIER_PHASES == (TIER_CART, TIER_ADS, TIER_CATALOG)

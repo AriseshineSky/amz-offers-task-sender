@@ -16,7 +16,7 @@ from carts_amz_offers.data_source import (
 )
 from carts_amz_offers.gcs_helper import GCSHelper
 from carts_amz_offers.offers_update_metrics import save_offers_update_metrics
-from carts_amz_offers.offers_update_run_stats import OffersUpdateRunStats
+from carts_amz_offers.offers_update_run_stats import OffersUpdateRunStats, TierRunStats
 from carts_amz_offers.priority_tiers import (
     PRIORITY_BY_TIER,
     TIER_ADS,
@@ -54,6 +54,9 @@ MARKETPLACES = [
     "PL",
 ]
 
+# Global phase order: all marketplaces finish cart before any ads, then catalog (PG).
+TIER_PHASES = (TIER_CART, TIER_ADS, TIER_CATALOG)
+
 
 def _download_seed(gcs_helper, blob_name, local_path):
     local_path = Path(local_path)
@@ -63,22 +66,54 @@ def _download_seed(gcs_helper, blob_name, local_path):
     return None
 
 
-def _build_tiers(marketplace, cart_gcs, ads_gcs, pg_config):
+def _load_tier_source(tier_name, marketplace, cart_gcs, ads_gcs, catalog_source):
     marketplace_key = marketplace.lower()
-    cart_blob = CART_SEED_BLOB_TEMPLATE.format(marketplace.upper())
-    ads_blob = ADS_SEED_BLOB_TEMPLATE.format(marketplace.upper())
-    cart_local = Path(LOCAL_CART_SEED_TEMPLATE.format(marketplace_key))
-    ads_local = Path(LOCAL_ADS_SEED_TEMPLATE.format(marketplace_key))
+    if tier_name == TIER_CART:
+        blob = CART_SEED_BLOB_TEMPLATE.format(marketplace.upper())
+        local = Path(LOCAL_CART_SEED_TEMPLATE.format(marketplace_key))
+        return _download_seed(cart_gcs, blob, local)
+    if tier_name == TIER_ADS:
+        blob = ADS_SEED_BLOB_TEMPLATE.format(marketplace.upper())
+        local = Path(LOCAL_ADS_SEED_TEMPLATE.format(marketplace_key))
+        return _download_seed(ads_gcs, blob, local)
+    if tier_name == TIER_CATALOG:
+        return catalog_source
+    raise ValueError("Unknown tier: {}".format(tier_name))
 
-    cart_source = _download_seed(cart_gcs, cart_blob, cart_local)
-    ads_source = _download_seed(ads_gcs, ads_blob, ads_local)
-    catalog_source = ProductSourcesPgDataSource(pg_config)
 
-    return [
-        (TIER_CART, cart_source, PRIORITY_BY_TIER[TIER_CART]),
-        (TIER_ADS, ads_source, PRIORITY_BY_TIER[TIER_ADS]),
-        (TIER_CATALOG, catalog_source, PRIORITY_BY_TIER[TIER_CATALOG]),
-    ]
+def _run_marketplace_tier(
+    marketplace,
+    tier_name,
+    data_source,
+    broker_url,
+    qps,
+    ttl,
+    force,
+    seen_asins,
+    stats,
+):
+    if data_source is None:
+        logger.warning(
+            "[AmzOffersUpdate] Missing seed file for %s tier=%s",
+            marketplace,
+            tier_name,
+        )
+        tier_stats = TierRunStats(skipped_missing_file=True)
+        stats.tier_stats[tier_name] = tier_stats
+        stats.skipped_missing_file = True
+        return
+
+    sender = CartAmzOffersUpdateTaskSender(
+        [(tier_name, data_source, PRIORITY_BY_TIER[tier_name])],
+        broker_url,
+        qps,
+        marketplace,
+        condition="new",
+        ttl=ttl,
+        force=force,
+    )
+    phase_stats = sender.run(seen_asins=seen_asins) or OffersUpdateRunStats()
+    stats.merge(phase_stats)
 
 
 @click.command("Send Amazon offers update tasks from cart, ads, and catalog sources")
@@ -128,54 +163,60 @@ def feed_seeds(
 
     cart_gcs = GCSHelper(gcs_service_account_path, BUCKET_NAME, CART_GCS_PREFIX)
     ads_gcs = GCSHelper(gcs_service_account_path, BUCKET_NAME, ADS_GCS_PREFIX)
+    catalog_source = ProductSourcesPgDataSource(pg_config)
 
-    for marketplace in MARKETPLACES:
-        start_time = datetime.datetime.now()
-        stats = OffersUpdateRunStats()
-        error = None
-        marketplace_ttl = MARKETPLACE_TTL_HOURS.get(marketplace, ttl)
+    # Per-marketplace state survives across tier phases for ASIN dedup + metrics.
+    mp_state = {
+        mp: {
+            "seen_asins": set(),
+            "stats": OffersUpdateRunStats(),
+            "start_time": None,
+            "error": None,
+            "ttl": MARKETPLACE_TTL_HOURS.get(mp, ttl),
+        }
+        for mp in MARKETPLACES
+    }
 
-        try:
-            tiers = _build_tiers(marketplace, cart_gcs, ads_gcs, pg_config)
-            missing_tiers = [
-                tier_name
-                for tier_name, data_source, _priority in tiers
-                if data_source is None
-            ]
-            if missing_tiers:
-                logger.warning(
-                    "[AmzOffersUpdate] Missing seed files for %s tiers: %s",
-                    marketplace,
-                    ", ".join(missing_tiers),
+    for tier_name in TIER_PHASES:
+        logger.info("[AmzOffersUpdate] Starting tier phase: %s", tier_name)
+        for marketplace in MARKETPLACES:
+            state = mp_state[marketplace]
+            if state["start_time"] is None:
+                state["start_time"] = datetime.datetime.now()
+            try:
+                data_source = _load_tier_source(
+                    tier_name, marketplace, cart_gcs, ads_gcs, catalog_source
                 )
+                _run_marketplace_tier(
+                    marketplace,
+                    tier_name,
+                    data_source,
+                    broker_url,
+                    qps,
+                    state["ttl"],
+                    force,
+                    state["seen_asins"],
+                    state["stats"],
+                )
+            except Exception as e:
+                logger.exception(e)
+                state["error"] = str(e)
+        logger.info("[AmzOffersUpdate] Finished tier phase: %s", tier_name)
 
-            sender = CartAmzOffersUpdateTaskSender(
-                tiers,
-                broker_url,
-                qps,
-                marketplace,
-                condition="new",
-                ttl=marketplace_ttl,
-                force=force,
-            )
-            stats = sender.run() or stats
-            stats.skipped_missing_file = bool(missing_tiers)
-        except Exception as e:
-            logger.exception(e)
-            error = str(e)
-        finally:
-            end_time = datetime.datetime.now()
-            save_offers_update_metrics(
-                platform="amz",
-                marketplace=marketplace,
-                stats=stats,
-                start_time=start_time,
-                end_time=end_time,
-                ttl=marketplace_ttl,
-                error=error,
-                source=METRICS_SOURCE,
-                index_name=METRICS_INDEX_TEMPLATE.format(marketplace.lower()),
-            )
+    end_time = datetime.datetime.now()
+    for marketplace in MARKETPLACES:
+        state = mp_state[marketplace]
+        save_offers_update_metrics(
+            platform="amz",
+            marketplace=marketplace,
+            stats=state["stats"],
+            start_time=state["start_time"] or end_time,
+            end_time=end_time,
+            ttl=state["ttl"],
+            error=state["error"],
+            source=METRICS_SOURCE,
+            index_name=METRICS_INDEX_TEMPLATE.format(marketplace.lower()),
+        )
 
 
 if __name__ == "__main__":

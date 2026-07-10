@@ -4,35 +4,29 @@
 
 ## 功能概览
 
-一次运行会依次处理 14 个 marketplace（US、CA、MX、AE、DE、IN、IT、JP、UK、BR、NL、BE、FR、PL）。每个 marketplace 内：
+一次运行按 **tier 全局阶段** 处理 14 个 marketplace（US、CA、MX、AE、DE、IN、IT、JP、UK、BR、NL、BE、FR、PL）：
 
-1. 从 GCS 下载 **cart**、**ads** 种子文件
-2. 从 PostgreSQL **product_sources** 表流式读取 catalog ASIN
-3. 查询 Elasticsearch 中已有 offer，跳过 TTL 内仍有效的 ASIN
-4. 将需要更新的 ASIN 分批（每批最多 20 个）入队到 Redis 优先级子队列
-5. 将运行统计写入 Elasticsearch metrics 索引
+1. **cart 阶段**：对所有卖场从 GCS 下载 cart 种子并入队
+2. **ads 阶段**：对所有卖场从 GCS 下载 ads 种子并入队
+3. **catalog 阶段**：对所有卖场从 PostgreSQL `product_sources` 流式读取并入队
+4. 各阶段内查询 Elasticsearch 已有 offer，跳过 TTL 内仍有效的 ASIN；每批最多 20 个入队
+5. 全部阶段结束后，按卖场将运行统计写入 Elasticsearch metrics 索引
 
 ## 架构
 
 ```
-┌─────────────────┐   ┌─────────────────┐   ┌──────────────────────┐
-│  GCS cart seeds │   │  GCS ads seeds  │   │  PG product_sources  │
-│  priority = 0   │   │  priority = 5   │   │  priority = 9        │
-└────────┬────────┘   └────────┬────────┘   └──────────┬───────────┘
-         │                     │                        │
-         └─────────────────────┼────────────────────────┘
-                               ▼
-                  amz_offers_update_task_sender
-                               │
-              ┌────────────────┼────────────────┐
-              ▼                ▼                ▼
-         Offer ES 查询    去重 / TTL 过滤    dispatch_task()
-                               │
-                               ▼
-              SpapiItemOffersUpdate_{MP}[:0..9]
-                               │
-                               ▼
-                    em-spapi-celery workers
+Phase 1 (cart, all MPs)  →  Phase 2 (ads, all MPs)  →  Phase 3 (catalog/PG, all MPs)
+         │                            │                            │
+         └────────────────────────────┼────────────────────────────┘
+                                      ▼
+                         amz_offers_update_task_sender
+                                      │
+                     ┌────────────────┼────────────────┐
+                     ▼                ▼                ▼
+                Offer ES 查询    去重 / TTL 过滤    dispatch_task()
+                                      │
+                                      ▼
+                     SpapiItemOffersUpdate_{MP}[:0..9]
 ```
 
 ### 优先级 tier
@@ -45,7 +39,7 @@
 | **ads** | GCS 广告种子 | **5** (normal) | 中等 | `SpapiItemOffersUpdate_US:5` |
 | **catalog** | PostgreSQL `product_sources` | **9** (bulk) | 最低，大批量补刷 | `SpapiItemOffersUpdate_US:9` |
 
-处理顺序固定为 **cart → ads → catalog**。同一 ASIN 若在多个 tier 出现，先出现的 tier 入队，后续 tier 去重跳过。
+处理顺序固定为全局 **cart（全卖场）→ ads（全卖场）→ catalog/PG（全卖场）**。同一卖场内若 ASIN 在多个 tier 出现，先出现的 tier 入队，后续 tier 去重跳过。
 
 定义见 `carts_amz_offers/priority_tiers.py`。
 
@@ -76,7 +70,9 @@ export EM_SPAPI_CELERY_CONFIG=/path/to/em-spapi-celery/local_dev/config.ini
 export BROKER_URL='redis://127.0.0.1:6379/0'
 ```
 
-含特殊字符的 Redis 密码请用**单引号**导出，或对密码做 URL 编码（如 `$` → `%24`）。脚本不会通过 `-b` 传 broker URL，而是 `export BROKER_URL` 后由 Python 从环境变量读取，避免 bash 二次解析密码中的 `$`、`"`、`` ` `` 等字符。
+含特殊字符的 Redis 密码请用**单引号**导出，或对密码做 URL 编码（如 `$` → `%24`、`^` → `%5E`、`*` → `%2A`）。脚本不会通过 `-b` 传 broker URL，而是 `export BROKER_URL` 后由 Python 从环境变量读取，避免 bash 二次解析密码中的 `$`、`"`、`` ` `` 等字符。
+
+> 注意：`redis://pw@host/1` 会被解析成 **username=`pw`**（无密码），正确写法是 `redis://:pw@host/1`。
 
 ### config.ini 要求
 
@@ -132,7 +128,6 @@ QPS=10 TTL=24 \
 ```bash
 ./scripts/amz_offers_update_task_sender.sh \
   -s ~/.em_celery/gcs-sa.json \
-  -b 'redis://127.0.0.1:6379/0' \
   -q 20 -t 72
 ```
 
@@ -141,7 +136,7 @@ QPS=10 TTL=24 \
 ```bash
 uv run amz_offers_update_task_sender \
   -s /path/to/gcs-service-account.json \
-  -b redis://127.0.0.1:6379/0
+  -b 'redis://127.0.0.1:6379/0'
 ```
 
 ### CLI 参数
