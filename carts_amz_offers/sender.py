@@ -17,6 +17,28 @@ from em_celery.tools._sender_common import broker_connection
 from carts_amz_offers.offers_update_run_stats import OffersUpdateRunStats, TierRunStats
 
 
+def clear_marketplace_offer_queue(broker_url, marketplace):
+    """Delete all priority sub-queues for SpapiItemOffersUpdate_{MP}.
+
+    Returns the queue depth before clearing.
+    """
+    queue = "SpapiItemOffersUpdate_{}".format(marketplace.upper())
+    client = redis.Redis.from_url(broker_url, decode_responses=True)
+    depth_before = 0
+    try:
+        depth_before = redis_priority_queue_depth(client, queue)
+        for key in iter_redis_priority_queue_keys(queue):
+            client.delete(key)
+        logger.info(
+            "[TasksProcessing] Cleared queue %s (depth_before=%s)",
+            queue,
+            depth_before,
+        )
+    except Exception as e:
+        logger.exception(e)
+    return depth_before
+
+
 class CartAmzOffersUpdateTaskSender:
     """Read ASINs from tiered data sources and enqueue SP-API offer update tasks."""
 

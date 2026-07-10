@@ -212,10 +212,11 @@ Tab 分隔，每行：
 
 ## 入队逻辑
 
-1. **队列深度检查**：若 `SpapiItemOffersUpdate_{MP}` 全部 priority 子队列合计深度 > 5000 且未加 `-f`，本次 marketplace 跳过入队
-2. **Offer 过滤**（默认）：查询 ES `lowest_offer_listings`，跳过 TTL 内仍有效的 ASIN；`-f` 时跳过此检查，全部入队
-3. **分批发送**：每批最多 20 个 ASIN，按 `-q` 限速
-4. **Celery 任务**：`spapi_update_item_offers(marketplace, asins, condition="new")`
+1. **清空队列**：每次运行开始时，先清空各卖场 `SpapiItemOffersUpdate_{MP}` 全部 priority 子队列，避免与上次残留任务重复
+2. **队列深度检查**：若入队前深度仍 > 5000 且未加 `-f`，本次 marketplace 跳过入队（清空后通常为 0）
+3. **Offer 过滤**（默认）：查询 ES `lowest_offer_listings`，跳过 TTL 内仍有效的 ASIN；`-f` 时跳过此检查，全部入队
+4. **分批发送**：每批最多 20 个 ASIN，按 `-q` 限速
+5. **Celery 任务**：`spapi_update_item_offers(marketplace, asins, condition="new")`
 
 ## 运行统计
 
@@ -232,7 +233,7 @@ amz_offers_update_metrics_{marketplace}
 | `seed_cnt` | 读取到的有效 ASIN 总数 |
 | `queued_cnt` | 实际入队数 |
 | `fresh_cnt` | 因 offer 仍有效而跳过数 |
-| `queue_cnt_before` | 运行前队列深度 |
+| `queue_cnt_before` | 清空前队列深度 |
 | `queue_full` | 是否因队列过满而跳过 |
 | `tier_stats` | 各 tier 独立统计（seed / queued / fresh / dedup） |
 | `status` | `finished` / `skipped` / `failed` |

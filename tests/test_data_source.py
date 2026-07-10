@@ -130,6 +130,22 @@ def test_load_marketplace_tier_ttls_requires_section():
         assert "amz.offer.filter.fr" in str(exc)
 
 
+def test_clear_marketplace_offer_queue_deletes_priority_keys():
+    from carts_amz_offers.sender import clear_marketplace_offer_queue
+
+    client = MagicMock()
+    client.llen.side_effect = [3, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    with patch("carts_amz_offers.sender.redis.Redis.from_url", return_value=client):
+        depth = clear_marketplace_offer_queue("redis://127.0.0.1:6379/0", "us")
+
+    assert depth == 3
+    deleted = {call.args[0] for call in client.delete.call_args_list}
+    assert "SpapiItemOffersUpdate_US" in deleted
+    assert "SpapiItemOffersUpdate_US:5" in deleted
+    assert "SpapiItemOffersUpdate_US:9" in deleted
+
+
 def test_sender_deduplicates_lower_priority_tiers():
     cart_source = MagicMock()
     cart_source.get_amz_products.return_value = [

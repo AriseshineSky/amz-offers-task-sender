@@ -24,7 +24,10 @@ from carts_amz_offers.priority_tiers import (
     MissingOfferTtlConfigError,
     load_marketplace_tier_ttls,
 )
-from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender
+from carts_amz_offers.sender import (
+    CartAmzOffersUpdateTaskSender,
+    clear_marketplace_offer_queue,
+)
 
 BUCKET_NAME = "em-bucket"
 CART_GCS_PREFIX = "em-analytics/carts"
@@ -179,6 +182,11 @@ def feed_seeds(
         }
         for mp in MARKETPLACES
     }
+
+    # Drop leftover tasks from prior runs so this run does not stack duplicates.
+    for marketplace in MARKETPLACES:
+        depth_before = clear_marketplace_offer_queue(broker_url, marketplace)
+        mp_state[marketplace]["stats"].queue_cnt_before = depth_before
 
     for tier_name in TIER_PHASES:
         logger.info("[AmzOffersUpdate] Starting tier phase: %s", tier_name)
