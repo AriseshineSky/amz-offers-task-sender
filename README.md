@@ -112,14 +112,13 @@ product_sources_table = product_sources
 | `GCS_SA` | `~/.em_celery/gcs-sa.json` | GCS service account 路径 |
 | `BROKER_URL` | `redis://127.0.0.1:6379/0` | Redis broker |
 | `QPS` | `20` | 发送速率（msg/s） |
-| `TTL` | `24` | offer TTL 小时数 |
 
 示例：
 
 ```bash
 GCS_SA=~/.em_celery/gcs-sa.json \
 BROKER_URL='redis://127.0.0.1:6379/0' \
-QPS=10 TTL=24 \
+QPS=10 \
 ./scripts/amz_offers_update_task_sender.sh
 ```
 
@@ -128,7 +127,7 @@ QPS=10 TTL=24 \
 ```bash
 ./scripts/amz_offers_update_task_sender.sh \
   -s ~/.em_celery/gcs-sa.json \
-  -q 20 -t 72
+  -q 20
 ```
 
 ### 直接调用 CLI
@@ -146,8 +145,32 @@ uv run amz_offers_update_task_sender \
 | `-s`, `--gcs_service_account_path` | GCS service account JSON | **必填** |
 | `-b`, `--broker_url` | Celery broker URL | `BROKER_URL` 环境变量 |
 | `-q`, `--qps` | 发送速率（messages/s） | `20` |
-| `-t`, `--ttl` | offer 过期小时数；TTL 内已有 offer 的 ASIN 跳过 | `7`（各 marketplace 默认 24h） |
 | `-f`, `--force` | 忽略队列深度上限，强制入队 | `false` |
+
+### TTL（按卖场 × tier）
+
+Offer 是否仍有效由 ES 中 offer 时间与 TTL（小时）比较决定。**只**从 `EM_SPAPI_CELERY_CONFIG`（如 `~/.em_celery/config.ini`）的 `[amz.offer.filter.{mp}]` 读取，缺 section 或缺任一键则启动失败：
+
+| 配置键 | 对应 tier |
+|--------|-----------|
+| `cart_expire_hour` | **cart**（critical） |
+| `ads_expire_hour` | **ads**（normal） |
+| `expire_hour` | **catalog**（bulk） |
+
+示例：
+
+```ini
+[amz.offer.filter.ae]
+rating = 0
+feedback = 0
+domestic = True
+shipping_time = 7
+expire_hour = 120
+cart_expire_hour = 24
+ads_expire_hour = 48
+```
+
+每个 `MARKETPLACES` 中的卖场都必须有完整的上述三项配置。
 
 ## 数据源
 

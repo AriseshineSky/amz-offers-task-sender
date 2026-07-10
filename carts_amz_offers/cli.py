@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import datetime
-from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -22,6 +21,8 @@ from carts_amz_offers.priority_tiers import (
     TIER_ADS,
     TIER_CART,
     TIER_CATALOG,
+    MissingOfferTtlConfigError,
+    load_marketplace_tier_ttls,
 )
 from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender
 
@@ -34,8 +35,6 @@ LOCAL_CART_SEED_TEMPLATE = "tmp/gcs/carts/amz_{}.txt"
 LOCAL_ADS_SEED_TEMPLATE = "tmp/gcs/ads/amz_{}.txt"
 METRICS_SOURCE = "amz_offers_update"
 METRICS_INDEX_TEMPLATE = "amz_offers_update_metrics_{}"
-
-MARKETPLACE_TTL_HOURS = defaultdict(lambda: 24)
 
 MARKETPLACES = [
     "US",
@@ -133,13 +132,6 @@ def _run_marketplace_tier(
     help="Task send rate (messages per second).",
 )
 @click.option(
-    "-t",
-    "--ttl",
-    type=int,
-    default=7,
-    help="Offer alive hours before re-queue (overridden per marketplace defaults).",
-)
-@click.option(
     "-f",
     "--force",
     is_flag=True,
@@ -149,7 +141,6 @@ def feed_seeds(
     gcs_service_account_path,
     broker_url,
     qps,
-    ttl=7,
     force=False,
 ):
     setup_cli_logging("carts_amz_offers.cli", "amz_offers_update_task_sender.log")
@@ -159,6 +150,18 @@ def feed_seeds(
     if not pg_config:
         raise click.ClickException(
             "Missing [pg_db] section in em-spapi-celery config (EM_SPAPI_CELERY_CONFIG)."
+        )
+
+    ttl_by_marketplace = {}
+    ttl_errors = []
+    for mp in MARKETPLACES:
+        try:
+            ttl_by_marketplace[mp] = load_marketplace_tier_ttls(config, mp)
+        except MissingOfferTtlConfigError as exc:
+            ttl_errors.append(str(exc))
+    if ttl_errors:
+        raise click.ClickException(
+            "Offer TTL config incomplete:\n  - {}".format("\n  - ".join(ttl_errors))
         )
 
     cart_gcs = GCSHelper(gcs_service_account_path, BUCKET_NAME, CART_GCS_PREFIX)
@@ -172,7 +175,7 @@ def feed_seeds(
             "stats": OffersUpdateRunStats(),
             "start_time": None,
             "error": None,
-            "ttl": MARKETPLACE_TTL_HOURS.get(mp, ttl),
+            "ttl_by_tier": ttl_by_marketplace[mp],
         }
         for mp in MARKETPLACES
     }
@@ -187,13 +190,20 @@ def feed_seeds(
                 data_source = _load_tier_source(
                     tier_name, marketplace, cart_gcs, ads_gcs, catalog_source
                 )
+                tier_ttl = state["ttl_by_tier"][tier_name]
+                logger.info(
+                    "[AmzOffersUpdate] %s tier=%s ttl=%sh",
+                    marketplace,
+                    tier_name,
+                    tier_ttl,
+                )
                 _run_marketplace_tier(
                     marketplace,
                     tier_name,
                     data_source,
                     broker_url,
                     qps,
-                    state["ttl"],
+                    tier_ttl,
                     force,
                     state["seen_asins"],
                     state["stats"],
@@ -212,7 +222,7 @@ def feed_seeds(
             stats=state["stats"],
             start_time=state["start_time"] or end_time,
             end_time=end_time,
-            ttl=state["ttl"],
+            ttl=state["ttl_by_tier"],
             error=state["error"],
             source=METRICS_SOURCE,
             index_name=METRICS_INDEX_TEMPLATE.format(marketplace.lower()),

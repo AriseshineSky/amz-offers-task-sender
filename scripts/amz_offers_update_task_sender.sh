@@ -7,7 +7,7 @@
 # Run with explicit CLI args:
 #   ./scripts/amz_offers_update_task_sender.sh \
 #     -s ~/.em_celery/gcs-sa.json \
-#     -q 20 -t 72
+#     -q 20
 #
 # Broker URL is passed via BROKER_URL env (not -b) so passwords with
 # shell metacharacters ($, `, ", \, !) are not re-interpreted by bash.
@@ -16,9 +16,12 @@
 #   export BROKER_URL='redis://:p@ssw0rd@host:6379/0'
 #   ./scripts/amz_offers_update_task_sender.sh
 #
+# TTL is read from [amz.offer.filter.{mp}] in EM_SPAPI_CELERY_CONFIG
+# (expire_hour / cart_expire_hour / ads_expire_hour); missing keys abort.
+#
 # Direct equivalents:
-#   uv run amz_offers_update_task_sender -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20 -t 72
-#   uv run python -m carts_amz_offers.cli -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20 -t 72
+#   uv run amz_offers_update_task_sender -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20
+#   uv run python -m carts_amz_offers.cli -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20
 
 set -euo pipefail
 
@@ -29,7 +32,6 @@ GCS_SA="${GCS_SA:-${HOME}/.em_celery/gcs-sa.json}"
 : "${BROKER_URL:=redis://127.0.0.1:6379/0}"
 export BROKER_URL
 QPS="${QPS:-20}"
-TTL="${TTL:-12}"
 
 cd "${PROJECT_ROOT}"
 
@@ -39,5 +41,4 @@ fi
 
 exec uv run amz_offers_update_task_sender \
   -s "${GCS_SA}" \
-  -q "${QPS}" \
-  -t "${TTL}"
+  -q "${QPS}"

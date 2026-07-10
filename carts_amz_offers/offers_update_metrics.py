@@ -91,7 +91,9 @@ def save_offers_update_metrics(
             "queue_full": queue_full,
             "queue_cnt_before": queue_cnt_before,
             "skipped_missing_file": skipped_missing_file,
+            # Historical field name; value is hours (scalar) or {tier: hours}.
             "ttl_days": ttl,
+            "ttl_by_tier": ttl if isinstance(ttl, dict) else None,
             "error": error,
             "queue_rate_pct": round(queued_cnt * 100.0 / seed_cnt, 2) if seed_cnt else 0.0,
         }

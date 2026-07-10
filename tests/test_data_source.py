@@ -18,6 +18,8 @@ from carts_amz_offers.priority_tiers import (
     TIER_ADS,
     TIER_CART,
     TIER_CATALOG,
+    MissingOfferTtlConfigError,
+    load_marketplace_tier_ttls,
 )
 from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender
 from em_celery.scheduling.priority import PRIORITY_BULK, PRIORITY_CRITICAL, PRIORITY_NORMAL
@@ -97,6 +99,35 @@ def test_priority_tiers_order():
     assert PRIORITY_BY_TIER[TIER_ADS] == PRIORITY_NORMAL
     assert PRIORITY_BY_TIER[TIER_CATALOG] == PRIORITY_BULK
     assert PRIORITY_BY_TIER[TIER_CART] < PRIORITY_BY_TIER[TIER_ADS] < PRIORITY_BY_TIER[TIER_CATALOG]
+
+
+def test_load_marketplace_tier_ttls_from_offer_filter():
+    config = {
+        "amz.offer.filter.ae": {
+            "expire_hour": "120",
+            "cart_expire_hour": "6",
+            "ads_expire_hour": "12",
+        }
+    }
+    ttls = load_marketplace_tier_ttls(config, "AE")
+    assert ttls == {TIER_CART: 6, TIER_ADS: 12, TIER_CATALOG: 120}
+
+
+def test_load_marketplace_tier_ttls_requires_cart_ads_keys():
+    config = {"amz.offer.filter.us": {"expire_hour": "180"}}
+    try:
+        load_marketplace_tier_ttls(config, "us")
+        assert False, "expected MissingOfferTtlConfigError"
+    except MissingOfferTtlConfigError as exc:
+        assert "cart_expire_hour" in str(exc)
+
+
+def test_load_marketplace_tier_ttls_requires_section():
+    try:
+        load_marketplace_tier_ttls({}, "FR")
+        assert False, "expected MissingOfferTtlConfigError"
+    except MissingOfferTtlConfigError as exc:
+        assert "amz.offer.filter.fr" in str(exc)
 
 
 def test_sender_deduplicates_lower_priority_tiers():
