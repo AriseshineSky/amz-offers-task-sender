@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 
 from carts_amz_offers.data_source import (
@@ -244,3 +245,62 @@ def test_tier_phases_order():
     from carts_amz_offers.cli import TIER_PHASES
 
     assert TIER_PHASES == (TIER_CART, TIER_ADS, TIER_CATALOG)
+
+
+def test_save_offers_update_metrics_keeps_ttl_days_scalar():
+    """Existing ES mapping has ttl_days as long; dict must go in ttl_by_tier only."""
+    from carts_amz_offers.offers_update_metrics import save_offers_update_metrics
+
+    service = MagicMock()
+    start = end = __import__("datetime").datetime(2026, 7, 11, 12, 0, 0)
+    ttl = {"cart": 12, "ads": 48, "catalog": 120}
+
+    with patch(
+        "carts_amz_offers.offers_update_metrics.get_product_service",
+        return_value=service,
+    ):
+        save_offers_update_metrics(
+            platform="amz",
+            marketplace="ae",
+            stats=OffersUpdateRunStats(seed_cnt=1, queued_cnt=1),
+            start_time=start,
+            end_time=end,
+            ttl=ttl,
+            source="amz_offers_update",
+            index_name="amz_offers_update_metrics_ae",
+        )
+
+    doc = service.save_products.call_args.args[1][0]
+    assert doc["ttl_days"] == 120
+    assert doc["ttl_by_tier"] == ttl
+    assert not isinstance(doc["ttl_days"], dict)
+
+
+def test_resolve_marketplaces_defaults_to_all():
+    from carts_amz_offers.cli import MARKETPLACES, resolve_marketplaces
+
+    assert resolve_marketplaces(()) == list(MARKETPLACES)
+    assert resolve_marketplaces(None) == list(MARKETPLACES)
+
+
+def test_resolve_marketplaces_normalizes_and_dedupes():
+    from carts_amz_offers.cli import resolve_marketplaces
+
+    assert resolve_marketplaces(("us", "CA")) == ["US", "CA"]
+    assert resolve_marketplaces(("US,ca", "DE")) == ["US", "CA", "DE"]
+    assert resolve_marketplaces(("us us", "US")) == ["US"]
+
+
+def test_resolve_marketplaces_rejects_unknown():
+    from carts_amz_offers.cli import resolve_marketplaces
+
+    with pytest.raises(click.ClickException, match="Unknown marketplace"):
+        resolve_marketplaces(("ZZ",))
+
+
+def test_resolve_marketplaces_rejects_empty_tokens():
+    from carts_amz_offers.cli import resolve_marketplaces
+
+    with pytest.raises(click.ClickException, match="No marketplaces selected"):
+        resolve_marketplaces((",", "  "))
+

@@ -91,12 +91,18 @@ def save_offers_update_metrics(
             "queue_full": queue_full,
             "queue_cnt_before": queue_cnt_before,
             "skipped_missing_file": skipped_missing_file,
-            # Historical field name; value is hours (scalar) or {tier: hours}.
-            "ttl_days": ttl,
-            "ttl_by_tier": ttl if isinstance(ttl, dict) else None,
             "error": error,
             "queue_rate_pct": round(queued_cnt * 100.0 / seed_cnt, 2) if seed_cnt else 0.0,
         }
+        # ttl_days is historically mapped as long in ES; never write an object there.
+        # Per-tier hours go in ttl_by_tier; ttl_days keeps catalog (or scalar) for compat.
+        if isinstance(ttl, dict):
+            metric_doc["ttl_by_tier"] = ttl
+            catalog_ttl = ttl.get("catalog")
+            if catalog_ttl is not None:
+                metric_doc["ttl_days"] = catalog_ttl
+        elif ttl is not None:
+            metric_doc["ttl_days"] = ttl
 
         index_name = index_name or "carts_{}_offers_update_metrics_{}".format(
             platform, marketplace

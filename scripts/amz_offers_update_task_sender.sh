@@ -22,6 +22,12 @@
 # Direct equivalents:
 #   uv run amz_offers_update_task_sender -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20
 #   uv run python -m carts_amz_offers.cli -s ~/.em_celery/gcs-sa.json -b 'redis://...' -q 20
+#
+# Limit to one or more marketplaces:
+#   ./scripts/amz_offers_update_task_sender.sh -m US
+#   ./scripts/amz_offers_update_task_sender.sh -m US -m CA
+#   ./scripts/amz_offers_update_task_sender.sh -m US,CA,DE
+# (default: all 14 marketplaces)
 
 set -euo pipefail
 
@@ -35,10 +41,9 @@ QPS="${QPS:-20}"
 
 cd "${PROJECT_ROOT}"
 
-if [[ $# -gt 0 ]]; then
-  exec uv run amz_offers_update_task_sender "$@"
-fi
-
+# Always apply -s/-q defaults; extra CLI args (e.g. -m AE) append after.
+# If the caller also passes -s/-q, Click keeps the last value.
 exec uv run amz_offers_update_task_sender \
   -s "${GCS_SA}" \
-  -q "${QPS}"
+  -q "${QPS}" \
+  "$@"

@@ -59,6 +59,38 @@ MARKETPLACES = [
 # Global phase order: all marketplaces finish cart before any ads, then catalog (PG).
 TIER_PHASES = (TIER_CART, TIER_ADS, TIER_CATALOG)
 
+_MARKETPLACE_BY_KEY = {mp.upper(): mp for mp in MARKETPLACES}
+
+
+def resolve_marketplaces(selected):
+    """Normalize marketplace CLI args; default to all when empty.
+
+    Accepts repeated flags and/or comma/space-separated values, e.g.
+    ``("US", "ca")``, ``("US,CA",)``, ``("us ca",)``.
+    """
+    if not selected:
+        return list(MARKETPLACES)
+
+    resolved = []
+    seen = set()
+    for raw in selected:
+        for part in str(raw).replace(",", " ").split():
+            key = part.strip().upper()
+            if key not in _MARKETPLACE_BY_KEY:
+                raise click.ClickException(
+                    "Unknown marketplace {!r}. Choose from: {}".format(
+                        part, ", ".join(MARKETPLACES)
+                    )
+                )
+            if key not in seen:
+                seen.add(key)
+                resolved.append(_MARKETPLACE_BY_KEY[key])
+    if not resolved:
+        raise click.ClickException(
+            "No marketplaces selected. Choose from: {}".format(", ".join(MARKETPLACES))
+        )
+    return resolved
+
 
 def _download_seed(gcs_helper, blob_name, local_path):
     local_path = Path(local_path)
@@ -140,14 +172,30 @@ def _run_marketplace_tier(
     is_flag=True,
     help="Force enqueue even when queue depth exceeds the limit.",
 )
+@click.option(
+    "-m",
+    "--marketplace",
+    "marketplaces",
+    multiple=True,
+    help=(
+        "Marketplace(s) to process (e.g. -m US -m CA or -m US,CA). "
+        "Default: all ({}).".format(", ".join(MARKETPLACES))
+    ),
+)
 def feed_seeds(
     gcs_service_account_path,
     broker_url,
     qps,
     force=False,
+    marketplaces=(),
 ):
     setup_cli_logging("carts_amz_offers.cli", "amz_offers_update_task_sender.log")
     broker_url = normalize_broker(broker_url)
+    marketplaces = resolve_marketplaces(marketplaces)
+    logger.info(
+        "[AmzOffersUpdate] Marketplaces: %s",
+        ", ".join(marketplaces),
+    )
     config = get_config()
     pg_config = config.get("pg_db")
     if not pg_config:
@@ -157,7 +205,7 @@ def feed_seeds(
 
     ttl_by_marketplace = {}
     ttl_errors = []
-    for mp in MARKETPLACES:
+    for mp in marketplaces:
         try:
             ttl_by_marketplace[mp] = load_marketplace_tier_ttls(config, mp)
         except MissingOfferTtlConfigError as exc:
@@ -180,17 +228,17 @@ def feed_seeds(
             "error": None,
             "ttl_by_tier": ttl_by_marketplace[mp],
         }
-        for mp in MARKETPLACES
+        for mp in marketplaces
     }
 
     # Drop leftover tasks from prior runs so this run does not stack duplicates.
-    for marketplace in MARKETPLACES:
+    for marketplace in marketplaces:
         depth_before = clear_marketplace_offer_queue(broker_url, marketplace)
         mp_state[marketplace]["stats"].queue_cnt_before = depth_before
 
     for tier_name in TIER_PHASES:
         logger.info("[AmzOffersUpdate] Starting tier phase: %s", tier_name)
-        for marketplace in MARKETPLACES:
+        for marketplace in marketplaces:
             state = mp_state[marketplace]
             if state["start_time"] is None:
                 state["start_time"] = datetime.datetime.now()
@@ -222,7 +270,7 @@ def feed_seeds(
         logger.info("[AmzOffersUpdate] Finished tier phase: %s", tier_name)
 
     end_time = datetime.datetime.now()
-    for marketplace in MARKETPLACES:
+    for marketplace in marketplaces:
         state = mp_state[marketplace]
         save_offers_update_metrics(
             platform="amz",

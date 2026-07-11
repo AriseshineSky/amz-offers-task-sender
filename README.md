@@ -127,7 +127,8 @@ QPS=10 \
 ```bash
 ./scripts/amz_offers_update_task_sender.sh \
   -s ~/.em_celery/gcs-sa.json \
-  -q 20
+  -q 20 \
+  -m US
 ```
 
 ### 直接调用 CLI
@@ -146,6 +147,15 @@ uv run amz_offers_update_task_sender \
 | `-b`, `--broker_url` | Celery broker URL | `BROKER_URL` 环境变量 |
 | `-q`, `--qps` | 发送速率（messages/s） | `20` |
 | `-f`, `--force` | 忽略队列深度上限，强制入队 | `false` |
+| `-m`, `--marketplace` | 指定卖场（可重复，或逗号分隔，如 `-m US -m CA` / `-m US,CA`） | 全部 14 个卖场 |
+
+只跑指定卖场示例：
+
+```bash
+./scripts/amz_offers_update_task_sender.sh -m US
+./scripts/amz_offers_update_task_sender.sh -m US -m CA -m DE
+uv run amz_offers_update_task_sender -s ~/.em_celery/gcs-sa.json -m US,UK
+```
 
 ### TTL（按卖场 × tier）
 
