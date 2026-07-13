@@ -150,6 +150,15 @@ def _run_marketplace_tier(
     stats.merge(phase_stats)
 
 
+def _sender_log_basename(marketplaces):
+    """One marketplace → dedicated log; otherwise shared sender log."""
+    if len(marketplaces) == 1:
+        return "amz_offers_update_task_sender_{}.log".format(
+            marketplaces[0].lower()
+        )
+    return "amz_offers_update_task_sender.log"
+
+
 @click.command("Send Amazon offers update tasks from cart, ads, and catalog sources")
 @broker_option()
 @click.option(
@@ -189,9 +198,12 @@ def feed_seeds(
     force=False,
     marketplaces=(),
 ):
-    setup_cli_logging("carts_amz_offers.cli", "amz_offers_update_task_sender.log")
     broker_url = normalize_broker(broker_url)
     marketplaces = resolve_marketplaces(marketplaces)
+    setup_cli_logging(
+        "carts_amz_offers.cli",
+        _sender_log_basename(marketplaces),
+    )
     logger.info(
         "[AmzOffersUpdate] Marketplaces: %s",
         ", ".join(marketplaces),

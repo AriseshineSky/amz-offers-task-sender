@@ -99,7 +99,8 @@ def test_priority_tiers_order():
     assert PRIORITY_BY_TIER[TIER_CART] == PRIORITY_CRITICAL
     assert PRIORITY_BY_TIER[TIER_ADS] == PRIORITY_NORMAL
     assert PRIORITY_BY_TIER[TIER_CATALOG] == PRIORITY_BULK
-    assert PRIORITY_BY_TIER[TIER_CART] < PRIORITY_BY_TIER[TIER_ADS] < PRIORITY_BY_TIER[TIER_CATALOG]
+    # User priority: higher number = higher priority (9 critical … 0 bulk).
+    assert PRIORITY_BY_TIER[TIER_CART] > PRIORITY_BY_TIER[TIER_ADS] > PRIORITY_BY_TIER[TIER_CATALOG]
 
 
 def test_load_marketplace_tier_ttls_from_offer_filter():
@@ -303,4 +304,12 @@ def test_resolve_marketplaces_rejects_empty_tokens():
 
     with pytest.raises(click.ClickException, match="No marketplaces selected"):
         resolve_marketplaces((",", "  "))
+
+
+def test_sender_log_basename_per_marketplace():
+    from carts_amz_offers.cli import MARKETPLACES, _sender_log_basename
+
+    assert _sender_log_basename(["DE"]) == "amz_offers_update_task_sender_de.log"
+    assert _sender_log_basename(["US", "CA"]) == "amz_offers_update_task_sender.log"
+    assert _sender_log_basename(list(MARKETPLACES)) == "amz_offers_update_task_sender.log"
 
