@@ -22,8 +22,38 @@ from carts_amz_offers.priority_tiers import (
     MissingOfferTtlConfigError,
     load_marketplace_tier_ttls,
 )
-from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender
-from em_celery.scheduling.priority import PRIORITY_BULK, PRIORITY_NORMAL
+from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender, seen_asins_redis_key
+from em_celery.scheduling.priority import PRIORITY_NORMAL
+
+
+def _mock_redis_claim_set():
+    """In-memory Redis stand-in for SADD-based ASIN claiming."""
+    claimed = set()
+
+    def sadd(_key, asin):
+        if asin in claimed:
+            return 0
+        claimed.add(asin)
+        return 1
+
+    client = MagicMock()
+    pipe = MagicMock()
+    pending = []
+
+    def pipe_sadd(_key, asin):
+        pending.append(asin)
+
+    def pipe_execute():
+        results = [sadd(_key=None, asin=a) for a in pending]
+        pending.clear()
+        return results
+
+    pipe.sadd.side_effect = pipe_sadd
+    pipe.execute.side_effect = pipe_execute
+    client.pipeline.return_value = pipe
+    client.sadd.side_effect = sadd
+    client.claimed = claimed
+    return client
 
 
 def test_seed_file_data_source_reads_json_products(tmp_path):
@@ -98,7 +128,7 @@ def test_product_sources_pg_data_source_yields_rows():
 def test_priority_tiers_order():
     assert PRIORITY_BY_TIER[TIER_CART] == 3
     assert PRIORITY_BY_TIER[TIER_ADS] == PRIORITY_NORMAL
-    assert PRIORITY_BY_TIER[TIER_CATALOG] == PRIORITY_BULK
+    assert PRIORITY_BY_TIER[TIER_CATALOG] == 8
     # Redis Celery: lower number = higher priority (0 critical … 9 bulk).
     assert PRIORITY_BY_TIER[TIER_CART] < PRIORITY_BY_TIER[TIER_ADS] < PRIORITY_BY_TIER[TIER_CATALOG]
 
@@ -146,6 +176,7 @@ def test_clear_marketplace_offer_queue_deletes_priority_keys():
     assert "SpapiItemOffersUpdate_US" in deleted
     assert "SpapiItemOffersUpdate_US:5" in deleted
     assert "SpapiItemOffersUpdate_US:9" in deleted
+    assert seen_asins_redis_key("us") in deleted
 
 
 def test_sender_deduplicates_lower_priority_tiers():
@@ -167,22 +198,30 @@ def test_sender_deduplicates_lower_priority_tiers():
     tiers = [
         ("cart", cart_source, 3),
         ("ads", ads_source, PRIORITY_NORMAL),
-        ("catalog", catalog_source, PRIORITY_BULK),
+        ("catalog", catalog_source, 8),
     ]
 
-    sender = CartAmzOffersUpdateTaskSender(
-        tiers,
-        broker_url="redis://127.0.0.1:6379/0",
-        qps=0,
-        marketplace="us",
-        condition="new",
-        ttl=24,
-        force=True,
-    )
-    sender.process_products = MagicMock(side_effect=lambda asins, priority: len(asins))
-    sender.tasks_cnt = MagicMock(return_value=0)
+    redis_client = _mock_redis_claim_set()
+    with patch(
+        "carts_amz_offers.sender.redis.Redis.from_url", return_value=redis_client
+    ), patch(
+        "carts_amz_offers.sender.broker_connection", return_value=MagicMock()
+    ), patch(
+        "carts_amz_offers.sender.get_offer_service", return_value=MagicMock()
+    ):
+        sender = CartAmzOffersUpdateTaskSender(
+            tiers,
+            broker_url="redis://127.0.0.1:6379/0",
+            qps=0,
+            marketplace="us",
+            condition="new",
+            ttl=24,
+            force=True,
+        )
+        sender.process_products = MagicMock(side_effect=lambda asins, priority: len(asins))
+        sender.tasks_cnt = MagicMock(return_value=0)
 
-    stats = sender.run()
+        stats = sender.run()
 
     assert stats.tier_stats["cart"].seed_cnt == 1
     assert stats.tier_stats["ads"].seed_cnt == 1
@@ -191,13 +230,14 @@ def test_sender_deduplicates_lower_priority_tiers():
     assert stats.tier_stats["catalog"].dedup_cnt == 1
     assert sender.process_products.call_args_list[0].args[1] == 3
     assert sender.process_products.call_args_list[1].args[1] == PRIORITY_NORMAL
-    assert sender.process_products.call_args_list[2].args[1] == PRIORITY_BULK
+    assert sender.process_products.call_args_list[2].args[1] == 8
+    assert redis_client.claimed == {"B012345678", "B087654321", "B099999999"}
 
 
 def test_sender_deduplicates_across_phased_runs():
-    """CLI runs cart → ads → catalog as separate phases with a shared seen set."""
-    seen_asins = set()
+    """CLI runs cart → ads → catalog as separate phases sharing Redis seen set."""
     total = OffersUpdateRunStats()
+    redis_client = _mock_redis_claim_set()
 
     cart_source = MagicMock()
     cart_source.get_amz_products.return_value = [
@@ -209,27 +249,34 @@ def test_sender_deduplicates_across_phased_runs():
         {"source_product_id": "B087654321"},
     ]
 
-    for tier_name, source, priority in [
-        ("cart", cart_source, 3),
-        ("ads", ads_source, PRIORITY_NORMAL),
-    ]:
-        sender = CartAmzOffersUpdateTaskSender(
-            [(tier_name, source, priority)],
-            broker_url="redis://127.0.0.1:6379/0",
-            qps=0,
-            marketplace="us",
-            condition="new",
-            ttl=24,
-            force=True,
-        )
-        sender.process_products = MagicMock(side_effect=lambda asins, p: len(asins))
-        sender.tasks_cnt = MagicMock(return_value=0)
-        total.merge(sender.run(seen_asins=seen_asins))
+    with patch(
+        "carts_amz_offers.sender.redis.Redis.from_url", return_value=redis_client
+    ), patch(
+        "carts_amz_offers.sender.broker_connection", return_value=MagicMock()
+    ), patch(
+        "carts_amz_offers.sender.get_offer_service", return_value=MagicMock()
+    ):
+        for tier_name, source, priority in [
+            ("cart", cart_source, 3),
+            ("ads", ads_source, PRIORITY_NORMAL),
+        ]:
+            sender = CartAmzOffersUpdateTaskSender(
+                [(tier_name, source, priority)],
+                broker_url="redis://127.0.0.1:6379/0",
+                qps=0,
+                marketplace="us",
+                condition="new",
+                ttl=24,
+                force=True,
+            )
+            sender.process_products = MagicMock(side_effect=lambda asins, p: len(asins))
+            sender.tasks_cnt = MagicMock(return_value=0)
+            total.merge(sender.run())
 
     assert total.tier_stats["cart"].seed_cnt == 1
     assert total.tier_stats["ads"].seed_cnt == 1
     assert total.tier_stats["ads"].dedup_cnt == 1
-    assert seen_asins == {"B012345678", "B087654321"}
+    assert redis_client.claimed == {"B012345678", "B087654321"}
 
 
 def test_offers_update_run_stats_serializes_tier_stats():
@@ -312,4 +359,3 @@ def test_sender_log_basename_per_marketplace():
     assert _sender_log_basename(["DE"]) == "amz_offers_update_task_sender_de.log"
     assert _sender_log_basename(["US", "CA"]) == "amz_offers_update_task_sender.log"
     assert _sender_log_basename(list(MARKETPLACES)) == "amz_offers_update_task_sender.log"
-

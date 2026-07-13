@@ -23,7 +23,7 @@ Phase 1 (cart, all MPs)  →  Phase 2 (ads, all MPs)  →  Phase 3 (catalog/PG, 
                                       │
                      ┌────────────────┼────────────────┐
                      ▼                ▼                ▼
-                Offer ES 查询    去重 / TTL 过滤    dispatch_task()
+                Offer ES 查询    Redis 去重 / TTL 过滤    dispatch_task()
                                       │
                                       ▼
                      SpapiItemOffersUpdate_{MP}[:0..9]
@@ -37,9 +37,9 @@ Phase 1 (cart, all MPs)  →  Phase 2 (ads, all MPs)  →  Phase 3 (catalog/PG, 
 |------|--------|--------|------|------------------------|
 | **cart** | GCS 购物车分析种子 | **3** | 高于 ads，次于 critical/high | `SpapiItemOffersUpdate_US:3` |
 | **ads** | GCS 广告种子 | **5** (normal) | 中等 | `SpapiItemOffersUpdate_US:5` |
-| **catalog** | PostgreSQL `product_sources` | **9** (bulk) | 最低，大批量补刷 | `SpapiItemOffersUpdate_US:9` |
+| **catalog** | PostgreSQL `product_sources` | **8** | 全量补刷（低于 normal，高于 bulk=9） | `SpapiItemOffersUpdate_US:8` |
 
-处理顺序固定为全局 **cart（全卖场）→ ads（全卖场）→ catalog/PG（全卖场）**。同一卖场内若 ASIN 在多个 tier 出现，先出现的 tier 入队，后续 tier 去重跳过。
+处理顺序固定为全局 **cart（全卖场）→ ads（全卖场）→ catalog/PG（全卖场）**。同一卖场内若 ASIN 在多个 tier 出现，通过 Redis SET（`amz_offers_update:seen:{mp}`）去重：高优先级 tier 先 claim，后续 tier 跳过。每次运行开始清空队列时一并删除该 SET。
 
 定义见 `carts_amz_offers/priority_tiers.py`。
 
@@ -164,8 +164,8 @@ Offer 是否仍有效由 ES 中 offer 时间与 TTL（小时）比较决定。**
 | 配置键 | 对应 tier |
 |--------|-----------|
 | `cart_expire_hour` | **cart**（priority 3） |
-| `ads_expire_hour` | **ads**（normal） |
-| `expire_hour` | **catalog**（bulk） |
+| `ads_expire_hour` | **ads**（normal / 5） |
+| `expire_hour` | **catalog**（priority 8） |
 
 示例：
 
@@ -222,11 +222,12 @@ Tab 分隔，每行：
 
 ## 入队逻辑
 
-1. **清空队列**：每次运行开始时，先清空各卖场 `SpapiItemOffersUpdate_{MP}` 全部 priority 子队列，避免与上次残留任务重复
-2. **队列深度检查**：若入队前深度仍 > 5000 且未加 `-f`，本次 marketplace 跳过入队（清空后通常为 0）
-3. **Offer 过滤**（默认）：查询 ES `lowest_offer_listings`，跳过 TTL 内仍有效的 ASIN；`-f` 时跳过此检查，全部入队
-4. **分批发送**：每批最多 20 个 ASIN，按 `-q` 限速
-5. **Celery 任务**：`spapi_update_item_offers(marketplace, asins, condition="new")`
+1. **清空队列与去重 SET**：每次运行开始时，先清空各卖场 `SpapiItemOffersUpdate_{MP}` 全部 priority 子队列，并删除 `amz_offers_update:seen:{mp}`，避免与上次残留任务/ASIN 重复
+2. **跨 tier Redis 去重**：按 cart → ads → catalog 顺序用 Redis `SADD` claim ASIN；已在高优先级（如 cart）出现的 ASIN 不会再入 ads / catalog 队列
+3. **队列深度检查**：若入队前深度仍 > 5000 且未加 `-f`，本次 marketplace 跳过入队（清空后通常为 0）
+4. **Offer 过滤**（默认）：查询 ES `lowest_offer_listings`，跳过 TTL 内仍有效的 ASIN；`-f` 时跳过此检查，全部入队
+5. **分批发送**：每批最多 20 个 ASIN，按 `-q` 限速
+6. **Celery 任务**：`spapi_update_item_offers(marketplace, asins, condition="new")`
 
 ## 运行统计
 
@@ -262,4 +263,4 @@ uv run pytest
 - 本项目是**独立的 seed → 入队**工具，不包含 worker 逻辑
 - 使用 `em-spapi-celery` 的 `dispatch_task()` 与 Redis 优先级子队列（`:0` … `:9`）
 - 队列深度统计与清空覆盖全部 priority 子队列
-- Worker 按 priority 0 → 9 顺序消费，cart(3) 优先于 ads(5) 和 catalog(9)
+- Worker 按 priority 0 → 9 顺序消费，cart(3) 优先于 ads(5) 和 catalog(8)

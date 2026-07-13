@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from em_celery.scheduling.priority import (
-    PRIORITY_BULK,
-    PRIORITY_NORMAL,
-)
+from em_celery.scheduling.priority import PRIORITY_NORMAL
 
 TIER_CART = "cart"
 TIER_ADS = "ads"
@@ -11,11 +8,12 @@ TIER_CATALOG = "catalog"
 
 ALL_TIERS = (TIER_CART, TIER_ADS, TIER_CATALOG)
 
-# cart uses numeric priority 3 (between high=2 and normal=5).
+# Redis Celery priority: lower number = higher priority (0 critical … 9 lowest).
+# cart=3 (between high=2 and normal=5), ads=5, catalog=8 (above bulk=9).
 PRIORITY_BY_TIER = {
     TIER_CART: 3,
     TIER_ADS: PRIORITY_NORMAL,
-    TIER_CATALOG: PRIORITY_BULK,
+    TIER_CATALOG: 8,
 }
 
 # Required keys under [amz.offer.filter.{mp}].

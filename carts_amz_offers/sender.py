@@ -16,9 +16,17 @@ from em_celery.tools._sender_common import broker_connection
 
 from carts_amz_offers.offers_update_run_stats import OffersUpdateRunStats, TierRunStats
 
+# Redis SET of ASINs already claimed this run (cleared with offer queues).
+# Higher tiers (cart → ads → catalog) claim first; later tiers skip members.
+SEEN_ASINS_KEY_TEMPLATE = "amz_offers_update:seen:{}"
+
+
+def seen_asins_redis_key(marketplace):
+    return SEEN_ASINS_KEY_TEMPLATE.format((marketplace or "").lower())
+
 
 def clear_marketplace_offer_queue(broker_url, marketplace):
-    """Delete all priority sub-queues for SpapiItemOffersUpdate_{MP}.
+    """Delete all priority sub-queues and the ASIN dedup set for a marketplace.
 
     Returns the queue depth before clearing.
     """
@@ -29,9 +37,12 @@ def clear_marketplace_offer_queue(broker_url, marketplace):
         depth_before = redis_priority_queue_depth(client, queue)
         for key in iter_redis_priority_queue_keys(queue):
             client.delete(key)
+        dedup_key = seen_asins_redis_key(marketplace)
+        client.delete(dedup_key)
         logger.info(
-            "[TasksProcessing] Cleared queue %s (depth_before=%s)",
+            "[TasksProcessing] Cleared queue %s and dedup key %s (depth_before=%s)",
             queue,
+            dedup_key,
             depth_before,
         )
     except Exception as e:
@@ -65,6 +76,7 @@ class CartAmzOffersUpdateTaskSender:
         self.offer_type = "lowest_offer_listings"
         self.last_send_time = None
         self.redis = self._redis_client(broker_url)
+        self.seen_asins_key = seen_asins_redis_key(self.marketplace)
         self.max_tasks_cnt = 5000
         self.stats = OffersUpdateRunStats()
 
@@ -72,13 +84,28 @@ class CartAmzOffersUpdateTaskSender:
         # from_url correctly decodes percent-encoded passwords (urlparse does not).
         return redis.Redis.from_url(broker_url, decode_responses=True)
 
-    def run(self, seen_asins=None):
-        """Enqueue configured tiers.
+    def _claim_asins(self, asins):
+        """Atomically claim ASINs in Redis; return (new_asins, dedup_cnt).
 
-        Args:
-            seen_asins: Optional shared set for cross-tier / cross-phase ASIN
-                dedup within one marketplace. Mutated in place when provided.
+        Uses pipeline SADD so higher-priority tiers win and lower tiers skip.
         """
+        if not asins:
+            return [], 0
+        pipe = self.redis.pipeline(transaction=False)
+        for asin in asins:
+            pipe.sadd(self.seen_asins_key, asin)
+        results = pipe.execute()
+        new_asins = []
+        dedup_cnt = 0
+        for asin, added in zip(asins, results):
+            if added:
+                new_asins.append(asin)
+            else:
+                dedup_cnt += 1
+        return new_asins, dedup_cnt
+
+    def run(self):
+        """Enqueue configured tiers with Redis cross-tier ASIN dedup."""
         cnt = self.tasks_cnt()
         self.stats.queue_cnt_before = cnt
         if cnt > self.max_tasks_cnt and not self.force:
@@ -86,8 +113,6 @@ class CartAmzOffersUpdateTaskSender:
             self.stats.queue_full = True
             return self.stats
 
-        if seen_asins is None:
-            seen_asins = set()
         for tier_name, data_source, priority in self.tiers:
             tier_stats = TierRunStats()
             if data_source is None:
@@ -102,25 +127,29 @@ class CartAmzOffersUpdateTaskSender:
                 if not asin or not is_asin_valid(asin):
                     continue
 
-                if asin in seen_asins:
-                    tier_stats.dedup_cnt += 1
-                    continue
-
-                seen_asins.add(asin)
-                tier_stats.seed_cnt += 1
                 asins_buf.append(asin)
                 if len(asins_buf) < batch_size:
                     continue
 
-                queued_cnt = self.process_products(asins_buf, priority)
-                tier_stats.queued_cnt += queued_cnt
-                tier_stats.fresh_cnt += len(asins_buf) - queued_cnt
+                new_asins, dedup_cnt = self._claim_asins(asins_buf)
+                tier_stats.dedup_cnt += dedup_cnt
+                tier_stats.seed_cnt += len(new_asins)
                 asins_buf = []
+                if not new_asins:
+                    continue
+
+                queued_cnt = self.process_products(new_asins, priority)
+                tier_stats.queued_cnt += queued_cnt
+                tier_stats.fresh_cnt += len(new_asins) - queued_cnt
 
             if asins_buf:
-                queued_cnt = self.process_products(asins_buf, priority)
-                tier_stats.queued_cnt += queued_cnt
-                tier_stats.fresh_cnt += len(asins_buf) - queued_cnt
+                new_asins, dedup_cnt = self._claim_asins(asins_buf)
+                tier_stats.dedup_cnt += dedup_cnt
+                tier_stats.seed_cnt += len(new_asins)
+                if new_asins:
+                    queued_cnt = self.process_products(new_asins, priority)
+                    tier_stats.queued_cnt += queued_cnt
+                    tier_stats.fresh_cnt += len(new_asins) - queued_cnt
 
             self.stats.tier_stats[tier_name] = tier_stats
             self.stats.seed_cnt += tier_stats.seed_cnt
@@ -209,6 +238,7 @@ class CartAmzOffersUpdateTaskSender:
         try:
             for key in iter_redis_priority_queue_keys(self.queue):
                 self.redis.delete(key)
+            self.redis.delete(self.seen_asins_key)
         except Exception as e:
             logger.exception(e)
 

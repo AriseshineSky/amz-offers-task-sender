@@ -123,7 +123,6 @@ def _run_marketplace_tier(
     qps,
     ttl,
     force,
-    seen_asins,
     stats,
 ):
     if data_source is None:
@@ -146,7 +145,7 @@ def _run_marketplace_tier(
         ttl=ttl,
         force=force,
     )
-    phase_stats = sender.run(seen_asins=seen_asins) or OffersUpdateRunStats()
+    phase_stats = sender.run() or OffersUpdateRunStats()
     stats.merge(phase_stats)
 
 
@@ -231,10 +230,10 @@ def feed_seeds(
     ads_gcs = GCSHelper(gcs_service_account_path, BUCKET_NAME, ADS_GCS_PREFIX)
     catalog_source = ProductSourcesPgDataSource(pg_config)
 
-    # Per-marketplace state survives across tier phases for ASIN dedup + metrics.
+    # Per-marketplace metrics state. Cross-tier ASIN dedup lives in Redis
+    # (cleared with offer queues at run start; see clear_marketplace_offer_queue).
     mp_state = {
         mp: {
-            "seen_asins": set(),
             "stats": OffersUpdateRunStats(),
             "start_time": None,
             "error": None,
@@ -243,7 +242,7 @@ def feed_seeds(
         for mp in marketplaces
     }
 
-    # Drop leftover tasks from prior runs so this run does not stack duplicates.
+    # Drop leftover tasks + dedup sets from prior runs so this run starts clean.
     for marketplace in marketplaces:
         depth_before = clear_marketplace_offer_queue(broker_url, marketplace)
         mp_state[marketplace]["stats"].queue_cnt_before = depth_before
@@ -273,7 +272,6 @@ def feed_seeds(
                     qps,
                     tier_ttl,
                     force,
-                    state["seen_asins"],
                     state["stats"],
                 )
             except Exception as e:
