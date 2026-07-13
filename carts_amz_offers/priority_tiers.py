@@ -2,7 +2,6 @@
 
 from em_celery.scheduling.priority import (
     PRIORITY_BULK,
-    PRIORITY_CRITICAL,
     PRIORITY_NORMAL,
 )
 
@@ -12,8 +11,9 @@ TIER_CATALOG = "catalog"
 
 ALL_TIERS = (TIER_CART, TIER_ADS, TIER_CATALOG)
 
+# cart uses numeric priority 3 (between high=2 and normal=5).
 PRIORITY_BY_TIER = {
-    TIER_CART: PRIORITY_CRITICAL,
+    TIER_CART: 3,
     TIER_ADS: PRIORITY_NORMAL,
     TIER_CATALOG: PRIORITY_BULK,
 }

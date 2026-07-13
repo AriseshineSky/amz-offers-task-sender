@@ -35,7 +35,7 @@ Phase 1 (cart, all MPs)  →  Phase 2 (ads, all MPs)  →  Phase 3 (catalog/PG, 
 
 | Tier | 数据源 | 优先级 | 含义 | Redis 子队列示例（US） |
 |------|--------|--------|------|------------------------|
-| **cart** | GCS 购物车分析种子 | **0** (critical) | 最高，worker 优先消费 | `SpapiItemOffersUpdate_US` |
+| **cart** | GCS 购物车分析种子 | **3** | 高于 ads，次于 critical/high | `SpapiItemOffersUpdate_US:3` |
 | **ads** | GCS 广告种子 | **5** (normal) | 中等 | `SpapiItemOffersUpdate_US:5` |
 | **catalog** | PostgreSQL `product_sources` | **9** (bulk) | 最低，大批量补刷 | `SpapiItemOffersUpdate_US:9` |
 
@@ -163,7 +163,7 @@ Offer 是否仍有效由 ES 中 offer 时间与 TTL（小时）比较决定。**
 
 | 配置键 | 对应 tier |
 |--------|-----------|
-| `cart_expire_hour` | **cart**（critical） |
+| `cart_expire_hour` | **cart**（priority 3） |
 | `ads_expire_hour` | **ads**（normal） |
 | `expire_hour` | **catalog**（bulk） |
 
@@ -262,4 +262,4 @@ uv run pytest
 - 本项目是**独立的 seed → 入队**工具，不包含 worker 逻辑
 - 使用 `em-spapi-celery` 的 `dispatch_task()` 与 Redis 优先级子队列（`:0` … `:9`）
 - 队列深度统计与清空覆盖全部 priority 子队列
-- Worker 按 priority 0 → 9 顺序消费，cart 任务始终优先于 ads 和 catalog
+- Worker 按 priority 0 → 9 顺序消费，cart(3) 优先于 ads(5) 和 catalog(9)

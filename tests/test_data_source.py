@@ -23,7 +23,7 @@ from carts_amz_offers.priority_tiers import (
     load_marketplace_tier_ttls,
 )
 from carts_amz_offers.sender import CartAmzOffersUpdateTaskSender
-from em_celery.scheduling.priority import PRIORITY_BULK, PRIORITY_CRITICAL, PRIORITY_NORMAL
+from em_celery.scheduling.priority import PRIORITY_BULK, PRIORITY_NORMAL
 
 
 def test_seed_file_data_source_reads_json_products(tmp_path):
@@ -96,11 +96,11 @@ def test_product_sources_pg_data_source_yields_rows():
 
 
 def test_priority_tiers_order():
-    assert PRIORITY_BY_TIER[TIER_CART] == PRIORITY_CRITICAL
+    assert PRIORITY_BY_TIER[TIER_CART] == 3
     assert PRIORITY_BY_TIER[TIER_ADS] == PRIORITY_NORMAL
     assert PRIORITY_BY_TIER[TIER_CATALOG] == PRIORITY_BULK
-    # User priority: higher number = higher priority (9 critical … 0 bulk).
-    assert PRIORITY_BY_TIER[TIER_CART] > PRIORITY_BY_TIER[TIER_ADS] > PRIORITY_BY_TIER[TIER_CATALOG]
+    # Redis Celery: lower number = higher priority (0 critical … 9 bulk).
+    assert PRIORITY_BY_TIER[TIER_CART] < PRIORITY_BY_TIER[TIER_ADS] < PRIORITY_BY_TIER[TIER_CATALOG]
 
 
 def test_load_marketplace_tier_ttls_from_offer_filter():
@@ -165,7 +165,7 @@ def test_sender_deduplicates_lower_priority_tiers():
     ]
 
     tiers = [
-        ("cart", cart_source, PRIORITY_CRITICAL),
+        ("cart", cart_source, 3),
         ("ads", ads_source, PRIORITY_NORMAL),
         ("catalog", catalog_source, PRIORITY_BULK),
     ]
@@ -189,7 +189,7 @@ def test_sender_deduplicates_lower_priority_tiers():
     assert stats.tier_stats["ads"].dedup_cnt == 1
     assert stats.tier_stats["catalog"].seed_cnt == 1
     assert stats.tier_stats["catalog"].dedup_cnt == 1
-    assert sender.process_products.call_args_list[0].args[1] == PRIORITY_CRITICAL
+    assert sender.process_products.call_args_list[0].args[1] == 3
     assert sender.process_products.call_args_list[1].args[1] == PRIORITY_NORMAL
     assert sender.process_products.call_args_list[2].args[1] == PRIORITY_BULK
 
@@ -210,7 +210,7 @@ def test_sender_deduplicates_across_phased_runs():
     ]
 
     for tier_name, source, priority in [
-        ("cart", cart_source, PRIORITY_CRITICAL),
+        ("cart", cart_source, 3),
         ("ads", ads_source, PRIORITY_NORMAL),
     ]:
         sender = CartAmzOffersUpdateTaskSender(
