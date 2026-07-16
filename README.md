@@ -1,6 +1,6 @@
 # amz-offers-task-sender
 
-从 **cart / ads / catalog** 三类数据源读取 Amazon ASIN，经 [em-spapi-celery](../em-spapi-celery) 按优先级写入 Celery 队列，触发 SP-API offer 更新任务。
+从 **cart / ads / catalog** 三类数据源（或本地 Amazon 链接文件）读取 ASIN，经 [em-spapi-celery](../em-spapi-celery) 的 `dispatch_task` 写入 Celery 队列。Worker 消费在 `em-spapi-celery`；本仓库只做 **producer（入队）**。
 
 ## 功能概览
 
@@ -130,6 +130,27 @@ QPS=10 \
   -q 20 \
   -m US
 ```
+
+### 紧急入队（Amazon URL / ASIN 文件 → priority 0）
+
+从本地文件读取 Amazon 链接或裸 ASIN，解析卖场后写入 **priority 0（critical）** 队列。**不会清空**现有队列（与上面的 cart/ads/catalog sender 不同）。
+
+```bash
+# 文件每行一个 URL 或 ASIN：
+# https://www.amazon.com/dp/B00WW3LSUO
+# B012345678
+./scripts/send_urgent_item_offers.sh /tmp/amz_urgent_links.txt
+
+# 或直接 CLI：
+uv run amz_offers_urgent_task_sender -p 0 -q 20 /tmp/amz_urgent_links.txt
+```
+
+| 环境变量 / 参数 | 默认 | 说明 |
+|-----------------|------|------|
+| `BROKER_URL` / `-b` | `redis://127.0.0.1:6379/0` | Redis broker |
+| `QPS` / `-q` | `20` | 发送速率 |
+| `PRIORITY` / `-p` | `0` | Celery 优先级（0 最高） |
+| `-m` | `us` | 裸 ASIN 的默认卖场（URL 从主机名解析） |
 
 ### 直接调用 CLI
 
