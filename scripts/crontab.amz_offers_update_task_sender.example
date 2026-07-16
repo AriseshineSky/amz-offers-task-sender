@@ -1,13 +1,28 @@
 # Crontab snippet for amz-offers-task-sender (per-marketplace flock).
 # Install on VPS as user Admin (merge into crontab -e).
 #
-# Every 4 hours at :45 (offset from em-amz-repricer :00/:15/:30).
+# Every 4 hours, staggered :45–:59 (offset from em-amz-repricer :00/:15/:30).
 # Lock: ~/.em_celery/locks/amz_offers_update_<mp>.lock
 # Logs: /tmp/amz_offers_update_task_sender_<mp>.log (+ logrotate)
+#
+# Requires [amz.offer.filter.{mp}] with expire_hour / cart_expire_hour / ads_expire_hour.
 
 SHELL=/bin/bash
 PATH=/home/Admin/.local/bin:/usr/local/bin:/usr/bin:/bin
 HOME=/home/Admin
 
-# TR — every 4 hours
-45 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh TR >> /tmp/amz_offers_update_task_sender_tr.log 2>&1
+45 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh US >> /tmp/amz_offers_update_task_sender_us.log 2>&1
+46 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh CA >> /tmp/amz_offers_update_task_sender_ca.log 2>&1
+47 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh MX >> /tmp/amz_offers_update_task_sender_mx.log 2>&1
+48 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh AE >> /tmp/amz_offers_update_task_sender_ae.log 2>&1
+49 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh DE >> /tmp/amz_offers_update_task_sender_de.log 2>&1
+50 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh IN >> /tmp/amz_offers_update_task_sender_in.log 2>&1
+51 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh IT >> /tmp/amz_offers_update_task_sender_it.log 2>&1
+52 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh JP >> /tmp/amz_offers_update_task_sender_jp.log 2>&1
+53 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh UK >> /tmp/amz_offers_update_task_sender_uk.log 2>&1
+54 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh BR >> /tmp/amz_offers_update_task_sender_br.log 2>&1
+55 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh NL >> /tmp/amz_offers_update_task_sender_nl.log 2>&1
+56 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh BE >> /tmp/amz_offers_update_task_sender_be.log 2>&1
+57 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh FR >> /tmp/amz_offers_update_task_sender_fr.log 2>&1
+58 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh PL >> /tmp/amz_offers_update_task_sender_pl.log 2>&1
+59 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh TR >> /tmp/amz_offers_update_task_sender_tr.log 2>&1
