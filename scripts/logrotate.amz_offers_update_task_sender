@@ -1,0 +1,20 @@
+# Keep ~2 days of amz-offers-update-task-sender cron logs under /tmp.
+# Install on VPS:
+#   sudo cp scripts/logrotate.amz_offers_update_task_sender \
+#     /etc/logrotate.d/amz_offers_update_task_sender
+# copytruncate: safe with cron ">> file 2>&1" appenders.
+# su: required because /tmp is world-writable.
+/tmp/amz_offers_update_task_sender_*.log
+{
+    daily
+    rotate 2
+    maxage 2
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+    su Admin Admin
+}

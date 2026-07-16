@@ -1,0 +1,13 @@
+# Crontab snippet for amz-offers-task-sender (per-marketplace flock).
+# Install on VPS as user Admin (merge into crontab -e).
+#
+# Every 4 hours at :45 (offset from em-amz-repricer :00/:15/:30).
+# Lock: ~/.em_celery/locks/amz_offers_update_<mp>.lock
+# Logs: /tmp/amz_offers_update_task_sender_<mp>.log (+ logrotate)
+
+SHELL=/bin/bash
+PATH=/home/Admin/.local/bin:/usr/local/bin:/usr/bin:/bin
+HOME=/home/Admin
+
+# TR — every 4 hours
+45 */4 * * * /home/Admin/scripts/run_amz_offers_update_task_sender.sh TR >> /tmp/amz_offers_update_task_sender_tr.log 2>&1
