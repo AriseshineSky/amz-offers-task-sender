@@ -54,6 +54,7 @@ MARKETPLACES = [
     "BE",
     "FR",
     "PL",
+    "TR",
 ]
 
 # Global phase order: all marketplaces finish cart before any ads, then catalog (PG).

@@ -4,7 +4,7 @@
 
 ## 功能概览
 
-一次运行按 **tier 全局阶段** 处理 14 个 marketplace（US、CA、MX、AE、DE、IN、IT、JP、UK、BR、NL、BE、FR、PL）：
+一次运行按 **tier 全局阶段** 处理 15 个 marketplace（US、CA、MX、AE、DE、IN、IT、JP、UK、BR、NL、BE、FR、PL、TR）：
 
 1. **cart 阶段**：对所有卖场从 GCS 下载 cart 种子并入队
 2. **ads 阶段**：对所有卖场从 GCS 下载 ads 种子并入队
@@ -147,7 +147,7 @@ uv run amz_offers_update_task_sender \
 | `-b`, `--broker_url` | Celery broker URL | `BROKER_URL` 环境变量 |
 | `-q`, `--qps` | 发送速率（messages/s） | `20` |
 | `-f`, `--force` | 忽略队列深度上限，强制入队 | `false` |
-| `-m`, `--marketplace` | 指定卖场（可重复，或逗号分隔，如 `-m US -m CA` / `-m US,CA`） | 全部 14 个卖场 |
+| `-m`, `--marketplace` | 指定卖场（可重复，或逗号分隔，如 `-m US -m CA` / `-m US,CA`） | 全部 15 个卖场 |
 
 只跑指定卖场示例：
 

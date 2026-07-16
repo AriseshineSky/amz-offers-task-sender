@@ -27,7 +27,7 @@
 #   ./scripts/amz_offers_update_task_sender.sh -m US
 #   ./scripts/amz_offers_update_task_sender.sh -m US -m CA
 #   ./scripts/amz_offers_update_task_sender.sh -m US,CA,DE
-# (default: all 14 marketplaces)
+# (default: all 15 marketplaces)
 
 set -euo pipefail
 
