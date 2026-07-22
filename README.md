@@ -133,24 +133,58 @@ QPS=10 \
 
 ### 紧急入队（Amazon URL / ASIN 文件 → priority 0）
 
-从本地文件读取 Amazon 链接或裸 ASIN，解析卖场后写入 **priority 0（critical）** 队列。**不会清空**现有队列（与上面的 cart/ads/catalog sender 不同）。
+从本地文件读取 Amazon 链接或裸 ASIN，解析卖场后写入 **priority 0（critical）** 队列——这是取价队列里**最高优先级**。**不会清空**现有队列（与上面的 cart/ads/catalog sender 不同）。
+
+#### 步骤
+
+1. 准备文件（每行一个 URL 或裸 ASIN）：
 
 ```bash
-# 文件每行一个 URL 或 ASIN：
-# https://www.amazon.com/dp/B00WW3LSUO
-# B012345678
-./scripts/send_urgent_item_offers.sh /tmp/amz_urgent_links.txt
+cat > /tmp/amz_urgent_links.txt <<'EOF'
+https://www.amazon.com/dp/B00WW3LSUO
+https://www.amazon.com/dp/B0CV63L8RS
+B012345678
+EOF
+```
 
-# 或直接 CLI：
+2. 配置环境并发送：
+
+```bash
+cd /path/to/amz-offers-task-sender
+export EM_SPAPI_CELERY_CONFIG=~/.em_celery/config.ini
+# 生产 worker 消费 Redis DB 1；BROKER_URL 与线上一致（见下方说明）
+export BROKER_URL='redis://:URL_ENCODED_PASSWORD@34.133.1.247:6379/1'
+
+./scripts/send_urgent_item_offers.sh /tmp/amz_urgent_links.txt
+```
+
+或直接 CLI：
+
+```bash
 uv run amz_offers_urgent_task_sender -p 0 -q 20 /tmp/amz_urgent_links.txt
+```
+
+成功时日志类似：
+
+```text
+[UrgentOfferSender] marketplace=us asins=4 priority=0 queue=SpapiItemOffersUpdate_US
+[UrgentOfferSender] queued marketplace=us asins=['B00WW3LSUO', ...] priority=0
+[UrgentOfferSender] done total_asins=4 priority=0
 ```
 
 | 环境变量 / 参数 | 默认 | 说明 |
 |-----------------|------|------|
-| `BROKER_URL` / `-b` | `redis://127.0.0.1:6379/0` | Redis broker |
+| `BROKER_URL` / `-b` | `redis://127.0.0.1:6379/0` | Redis broker（生产须用 **`/1`**） |
 | `QPS` / `-q` | `20` | 发送速率 |
 | `PRIORITY` / `-p` | `0` | Celery 优先级（0 最高） |
 | `-m` | `us` | 裸 ASIN 的默认卖场（URL 从主机名解析） |
+
+#### 注意
+
+- **卖场**：`amazon.com` → US，`amazon.co.uk` → UK 等；裸 ASIN 才用 `-m`（默认 `us`）。
+- **Broker DB**：线上 offer worker 连 Redis **`/1`**。本地 `~/.em_celery/config.ini` 的 `[broker_url] amz` 可能仍是 `/0`；紧急入队请用与线上一致的 `BROKER_URL`（可参考 `~/.em_celery/amz_offers_sender.env` 或生产机 `/home/Admin/.em_celery/amz_offers_sender.env`）。
+- **密码**：含 `$`、`^`、`*` 等字符时用单引号，或 URL 编码（`$`→`%24`，`^`→`%5E`，`*`→`%2A`）；格式为 `redis://:password@host:6379/1`（注意密码前的冒号）。
+- **与定时 sender**：本命令不 clear 队列；但定时 `amz_offers_update_task_sender` 启动时会清空该卖场全部 priority 子队列，若紧接着跑 cron，刚入的 priority 0 任务可能被清掉。
 
 ### 直接调用 CLI
 
